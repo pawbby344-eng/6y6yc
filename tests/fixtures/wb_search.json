@@ -1,0 +1,41 @@
+{
+  "metadata": {"name": "кофе", "catalog_type": "presets"},
+  "data": {
+    "products": [
+      {
+        "id": 149528072,
+        "name": "Кофе в зернах Арабика 1 кг",
+        "brand": "Jacobs",
+        "supplier": "ООО Кофейня",
+        "supplierId": 12345,
+        "reviewRating": 4.8,
+        "feedbacks": 15234,
+        "totalQuantity": 320,
+        "sizes": [
+          {"name": "", "price": {"basic": 189000, "product": 112900, "total": 112900}}
+        ]
+      },
+      {
+        "id": 7,
+        "name": "Кофе молотый 250 г",
+        "brand": "Egoiste",
+        "supplier": "ИП Иванов",
+        "reviewRating": 4.5,
+        "feedbacks": 42,
+        "totalQuantity": 5,
+        "salePriceU": 45000,
+        "priceU": 90000
+      },
+      {
+        "id": 88888888,
+        "name": "Кофе без цены",
+        "brand": "NoName",
+        "sizes": [{"name": "", "price": {}}]
+      },
+      {
+        "name": "Товар без id — должен быть пропущен",
+        "sizes": [{"price": {"product": 10000}}]
+      }
+    ]
+  }
+}

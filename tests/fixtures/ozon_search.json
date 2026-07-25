@@ -1,0 +1,13 @@
+{
+  "layout": [
+    {
+      "component": "searchResultsV2",
+      "stateId": "searchResultsV2-100-default-1"
+    }
+  ],
+  "widgetStates": {
+    "searchResultsV2-100-default-1": "{\"items\": [{\"action\": {\"link\": \"/product/kofe-v-zernah-arabika-1-kg-1234567/?asb=abc\"}, \"cellTrackingInfo\": {\"id\": 1234567, \"index\": 1, \"type\": \"sku\", \"title\": \"Кофе в зернах Арабика 1 кг\", \"price\": 1890.0, \"finalPrice\": 1129.0, \"availability\": 1, \"brand\": \"Jacobs\", \"seller\": {\"id\": 55, \"name\": \"Кофейня\"}}, \"mainState\": [{\"atom\": {\"type\": \"priceV2\", \"priceV2\": {\"price\": [{\"text\": \"1 129 ₽\", \"textStyle\": \"PRICE\"}, {\"text\": \"1 890 ₽\", \"textStyle\": \"ORIGINAL_PRICE\"}]}}}, {\"labelList\": {\"items\": [{\"title\": \"4.7\"}, {\"title\": \"1 204 отзыва\"}]}}], \"tileImage\": {\"items\": [{\"image\": {\"link\": \"https://cdn1.ozone.ru/s3/1.jpg\"}}]}}, {\"link\": \"/product/kofe-molotyy-250-g-7654321/\", \"mainState\": [{\"textAtom\": {\"text\": \"Кофе молотый <b>250 г</b>\"}}, {\"priceV2\": {\"price\": [{\"text\": \"450 ₽\", \"textStyle\": \"PRICE\"}]}}, {\"labelList\": {\"items\": [{\"title\": \"4.2\"}, {\"title\": \"38 отзывов\"}]}}]}, {\"cellTrackingInfo\": {\"id\": 1234567, \"title\": \"Кофе в зернах Арабика 1 кг\"}, \"link\": \"/product/1234567/\"}, {\"cellTrackingInfo\": {\"title\": \"Без id\"}}]}",
+    "tagList-200-default-1": "{\"items\": [{\"title\": \"не товар\"}]}",
+    "broken-300": "{not a json"
+  }
+}
