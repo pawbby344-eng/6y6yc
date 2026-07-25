@@ -74,6 +74,70 @@ def repair(text: str) -> str:
     return fixed
 
 
+def _bracket_stack(text: str) -> list[str] | None:
+    """Стек незакрытых скобок. None — если текст оборван внутри строки или битый."""
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]":
+            if not stack or stack[-1] != char:
+                return None
+            stack.pop()
+
+    return None if in_string else stack
+
+
+def salvage(text: str, *, max_candidates: int = 500) -> Any | None:
+    """Достаёт валидную «голову» из ответа, у которого испорчен хвост.
+
+    Так выглядит реальная поломка WB: корректный JSON, а следом обрывок чужого
+    ответа («…}},ot Found»). Обрезаем по последней завершённой структуре перед
+    мусором и дозакрываем то, что осталось открытым.
+    """
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as exc:
+        limit = min(exc.pos, len(text))
+    else:
+        return None  # текст и так валиден, спасать нечего
+
+    checked = 0
+    for index in range(limit - 1, 0, -1):
+        if text[index] not in "}]":
+            continue
+        checked += 1
+        if checked > max_candidates:
+            break
+
+        prefix = text[: index + 1]
+        stack = _bracket_stack(prefix)
+        if stack is None:
+            continue
+        try:
+            payload = json.loads(prefix + "".join(reversed(stack)))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, (dict, list)):
+            return payload
+
+    return None
+
+
 def loads_lenient(text: str, *, url: str = "", dump_on_failure: bool = True) -> Any:
     """json.loads, но с попыткой починить типовые поломки.
 
@@ -94,15 +158,10 @@ def loads_lenient(text: str, *, url: str = "", dump_on_failure: bool = True) -> 
         except json.JSONDecodeError:
             pass
 
-    # Последняя попытка: обрезать мусор после последней закрывающей скобки.
-    trimmed = text.rstrip()
-    for closing in ("}", "]"):
-        cut = trimmed.rfind(closing)
-        if cut > 0:
-            try:
-                return json.loads(trimmed[: cut + 1])
-            except json.JSONDecodeError:
-                continue
+    salvaged = salvage(text)
+    if salvaged is not None:
+        log.info("JSON от %s разобран частично: хвост ответа испорчен", url or "источника")
+        return salvaged
 
     error = json.JSONDecodeError("", text, 0)
     try:

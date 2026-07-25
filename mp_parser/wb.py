@@ -6,13 +6,22 @@ import logging
 from typing import Any, Iterable
 
 from .config import settings
-from .http import fetch_json
+from .http import FetchError, fetch_json
 from .models import Product, to_float, to_int
 
 log = logging.getLogger(__name__)
 
 SEARCH_URL = "https://search.wb.ru/exactmatch/ru/common/v13/search"
 CARD_URL = "https://www.wildberries.ru/catalog/{id}/detail.aspx"
+
+# Один адрес держать нельзя: WB то душит по 429, то подмешивает в тело обрывок
+# чужого ответа. Пробуем по очереди, пока какой-нибудь не отдаст товары.
+SEARCH_FALLBACKS: tuple[str, ...] = (
+    "https://u-search.wb.ru/exactmatch/ru/common/v13/search",
+    "https://search.wb.ru/exactmatch/ru/common/v9/search",
+    "https://u-search.wb.ru/exactmatch/ru/common/v9/search",
+    "https://search.wb.ru/exactmatch/ru/common/v5/search",
+)
 
 # Границы vol -> номер basket-хоста для картинок.
 _BASKET_BOUNDS: tuple[tuple[int, str], ...] = (
@@ -54,6 +63,20 @@ def _iter_raw_products(payload: Any) -> Iterable[dict[str, Any]]:
     if isinstance(payload.get("products"), list):
         return payload["products"]
     return []
+
+
+def _has_products_list(payload: Any) -> bool:
+    """Есть ли в ответе список товаров — пусть даже пустой.
+
+    Отличает честное «ничего не нашлось» от ответа, в котором данных нет
+    вовсе (обрезанное тело, заглушка анти-бота).
+    """
+    if not isinstance(payload, dict):
+        return False
+    data = payload.get("data")
+    if isinstance(data, dict) and isinstance(data.get("products"), list):
+        return True
+    return isinstance(payload.get("products"), list)
 
 
 def _prices(raw: dict[str, Any]) -> tuple[float | None, float | None]:
@@ -135,11 +158,36 @@ async def search(
         "spp": "30",
         "suppressSpellcheck": "false",
     }
-    payload = await fetch_json(
-        SEARCH_URL,
-        params=params,
-        headers={"Origin": "https://www.wildberries.ru", "Referer": "https://www.wildberries.ru/"},
-    )
-    products = parse_products(payload, limit=limit)
-    log.info("WB: запрос %r -> %s товаров", query, len(products))
-    return products
+    headers = {
+        "Origin": "https://www.wildberries.ru",
+        "Referer": "https://www.wildberries.ru/",
+        "x-requested-with": "XMLHttpRequest",
+    }
+
+    last_error: Exception | None = None
+    for index, url in enumerate((SEARCH_URL, *SEARCH_FALLBACKS)):
+        # Основному адресу даём полные ретраи, запасным — по одной попытке:
+        # они и нужны на случай, когда основной уже явно не в духе.
+        attempts = None if index == 0 else 1
+        try:
+            payload = await fetch_json(url, params=params, headers=headers, attempts=attempts)
+        except FetchError as exc:
+            last_error = exc
+            log.info("WB: %s не отдал данные (%s)", url, exc)
+            continue
+
+        products = parse_products(payload, limit=limit)
+        if products:
+            log.info("WB: запрос %r -> %s товаров (%s)", query, len(products), url)
+            return products
+
+        if _has_products_list(payload):
+            # Список пришёл, просто он пустой — это честный ответ «ничего нет»,
+            # а не поломка: перебирать остальные адреса незачем.
+            log.info("WB: по запросу %r ничего не найдено", query)
+            return []
+
+        last_error = FetchError(f"{url} ответил без списка товаров")
+        log.info("WB: %s ответил без списка товаров, пробую следующий адрес", url)
+
+    raise FetchError(f"WB не отдал выдачу ни по одному адресу: {last_error}")

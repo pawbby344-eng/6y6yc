@@ -28,6 +28,20 @@ BASE_HEADERS = {
 
 RETRY_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 
+# Дольше этого ждать бессмысленно: пользователь ждёт ответа в чате.
+MAX_RETRY_AFTER = 10.0
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """Значение заголовка Retry-After в секундах, если оно там есть."""
+    raw = response.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw.strip()))
+    except ValueError:
+        return None  # формат с датой не поддерживаем — подождём обычным бэкоффом
+
 
 class FetchError(RuntimeError):
     """Не удалось получить данные после всех попыток."""
@@ -82,6 +96,12 @@ async def fetch_json(
             if resp.status_code in RETRY_STATUSES:
                 last_error = FetchError(f"{url} -> HTTP {resp.status_code}")
                 log.warning("попытка %s/%s: HTTP %s для %s", attempt, attempts, resp.status_code, url)
+                # При 429 сервер сам говорит, сколько ждать — уважаем просьбу.
+                retry_after = _retry_after(resp)
+                if retry_after is not None and attempt < attempts:
+                    log.info("жду %.1f с по Retry-After", retry_after)
+                    await asyncio.sleep(min(retry_after, MAX_RETRY_AFTER))
+                    continue
             else:
                 resp.raise_for_status()
                 return loads_lenient(resp.text, url=url)

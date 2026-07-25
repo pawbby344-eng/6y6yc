@@ -20,7 +20,8 @@ from typing import Any, Iterator
 from urllib.parse import quote
 
 from .config import settings
-from .http import FetchError, fetch_json
+from .http import UA, FetchError, fetch_json
+from .jsonfix import dump_body
 from .models import Product, to_float, to_int
 
 log = logging.getLogger(__name__)
@@ -261,14 +262,31 @@ async def _fetch_via_browser(query: str, page: int, sort: str) -> Any:
     params = _api_params(query, page, sort)
     api_url = f"{API_URL}?url={quote(params['url'], safe='')}"
 
-    launch_kwargs: dict[str, Any] = {"headless": True}
+    launch_kwargs: dict[str, Any] = {
+        "headless": settings.ozon_headless,
+        # Без этого Chromium сам сообщает о себе как об автоматизированном.
+        "args": [
+            "--disable-blink-features=AutomationControlled",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--no-sandbox",
+        ],
+    }
     if settings.ozon_browser_path:
         launch_kwargs["executable_path"] = settings.ozon_browser_path
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(**launch_kwargs)
         try:
-            context = await browser.new_context(locale="ru-RU")
+            context = await browser.new_context(
+                locale="ru-RU",
+                timezone_id="Europe/Moscow",
+                viewport={"width": 1440, "height": 900},
+                user_agent=UA,
+            )
+            # navigator.webdriver = true — первое, что проверяет анти-бот.
+            await context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+            )
             page_obj = await context.new_page()
             await page_obj.goto(
                 SITE_SEARCH_URL.format(query=quote(query)),
@@ -339,9 +357,32 @@ async def _api_from_page(page_obj: Any, api_url: str) -> Any:
         return None
 
 
+async def _describe_page(page_obj: Any) -> str:
+    """Сохраняет страницу и возвращает её краткое описание для лога.
+
+    Когда плиток нет, важно понимать, что именно нам подсунули: капчу,
+    «доступ ограничен» или просто пустую выдачу. Без этого чинить нечего.
+    """
+    try:
+        title = await page_obj.title()
+        body = await page_obj.evaluate("() => (document.body?.innerText || '').slice(0, 400)")
+        html = await page_obj.content()
+    except Exception as exc:  # noqa: BLE001
+        return f"страницу прочитать не удалось ({type(exc).__name__}: {exc})"
+
+    dump = dump_body(html, page_obj.url)
+    summary = " ".join((body or "").split())[:200]
+    where = f", страница сохранена в {dump}" if dump else ""
+    return f"заголовок {title!r}, текст: {summary!r}{where}"
+
+
 async def _scrape_dom(page_obj: Any) -> dict[str, Any]:
     """Резервный сбор товаров из отрендеренной страницы поиска."""
-    await page_obj.wait_for_selector('a[href*="/product/"]', timeout=15_000)
+    try:
+        await page_obj.wait_for_selector('a[href*="/product/"]', timeout=15_000)
+    except Exception as exc:  # noqa: BLE001 - разбираемся, что за страница пришла
+        details = await _describe_page(page_obj)
+        raise OzonBlocked(f"на странице нет товаров ({details})") from exc
     raw = await page_obj.evaluate(
         """() => {
             const seen = new Set();

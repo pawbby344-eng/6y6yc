@@ -58,6 +58,8 @@ class Settings:
     ozon_browser_path: str = field(
         default_factory=lambda: os.environ.get("OZON_BROWSER_PATH", "")
     )
+    # Ozon распознаёт headless-браузер. Если выдача пустая — попробуй с окном.
+    ozon_headless: bool = field(default_factory=lambda: _env_bool("OZON_HEADLESS", True))
     cache_ttl: float = field(default_factory=lambda: _env_float("CACHE_TTL", 600.0))
 
 

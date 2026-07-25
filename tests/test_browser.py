@@ -184,3 +184,26 @@ def test_full_search_uses_browser_when_http_blocked(stub_server, monkeypatch):
     products = asyncio.run(run())
     assert len(products) == 2
     assert all(p.source == "ozon" for p in products)
+
+
+CHALLENGE_PAGE = """
+<meta charset="utf-8"><title>Доступ ограничен</title>
+<div>Мы обнаружили подозрительную активность. Подтвердите, что вы не робот.</div>
+"""
+
+
+def test_dom_failure_reports_what_page_came(stub_server, monkeypatch, tmp_path):
+    """Когда вместо выдачи прилетел анти-бот, это должно быть видно в ошибке."""
+    import mp_parser.jsonfix as jsonfix
+
+    monkeypatch.setattr(jsonfix, "DUMP_DIR", tmp_path / "dumps")
+    stub_server.html_route("/search/", CHALLENGE_PAGE)
+
+    with pytest.raises(ozon.OzonBlocked) as info:
+        asyncio.run(_with_page(stub_server.url("/search/"), ozon._scrape_dom))
+
+    message = str(info.value)
+    assert "Доступ ограничен" in message  # заголовок страницы
+    assert "не робот" in message  # и её текст
+    dumps = list((tmp_path / "dumps").iterdir())
+    assert len(dumps) == 1 and "Доступ ограничен" in dumps[0].read_text(encoding="utf-8")
