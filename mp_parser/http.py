@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from .config import settings
+from .jsonfix import JsonRepairError, loads_lenient
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +84,10 @@ async def fetch_json(
                 log.warning("попытка %s/%s: HTTP %s для %s", attempt, attempts, resp.status_code, url)
             else:
                 resp.raise_for_status()
-                return resp.json()
+                return loads_lenient(resp.text, url=url)
+        except JsonRepairError as exc:
+            # Повторять нечего: ответ пришёл целиком, просто он не JSON.
+            raise FetchError(f"{url} вернул неразбираемый ответ: {exc}") from exc
         except (httpx.HTTPError, ValueError) as exc:
             last_error = exc
             log.warning("попытка %s/%s не удалась (%s): %s", attempt, attempts, type(exc).__name__, exc)

@@ -94,13 +94,31 @@ def test_404_is_not_retried(stub_server, monkeypatch):
     assert len(stub_server.hits("/missing")) >= 1
 
 
-def test_broken_json_raises_fetch_error(stub_server, monkeypatch):
+def test_broken_json_raises_fetch_error(stub_server, monkeypatch, tmp_path):
+    import mp_parser.jsonfix as jsonfix
+
+    monkeypatch.setattr(jsonfix, "DUMP_DIR", tmp_path / "dumps")
     stub_server.raw_route("/search", lambda _q: (200, "application/json", "{это не json"))
     monkeypatch.setattr(wb, "SEARCH_URL", stub_server.url("/search"))
-    monkeypatch.setattr(settings, "retries", 1)
+    monkeypatch.setattr(settings, "retries", 3)
 
-    with pytest.raises(http.FetchError):
+    with pytest.raises(http.FetchError) as info:
         asyncio.run(wb.search("кофе"))
+
+    # Тело пришло целиком — повторять запрос бессмысленно, и дамп нужен один.
+    assert len(stub_server.hits("/search")) == 1
+    assert "сохранён" in str(info.value)
+    assert len(list((tmp_path / "dumps").iterdir())) == 1
+
+
+def test_slightly_broken_json_is_repaired(stub_server, monkeypatch):
+    """WB отвечает 200 с висячей запятой — выдача не должна пропадать."""
+    body = json.dumps(load("wb_search.json"), ensure_ascii=False)
+    stub_server.raw_route("/search", lambda _q: (200, "application/json", body[:-1] + ",}"))
+    monkeypatch.setattr(wb, "SEARCH_URL", stub_server.url("/search"))
+
+    products = asyncio.run(wb.search("кофе", limit=2))
+    assert len(products) == 2
 
 
 def test_empty_response_gives_no_products(stub_server, monkeypatch):
