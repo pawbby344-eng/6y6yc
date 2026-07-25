@@ -275,17 +275,18 @@ async def _fetch_via_browser(query: str, page: int, sort: str) -> Any:
                 wait_until="domcontentloaded",
                 timeout=int(settings.request_timeout * 1000),
             )
-            payload = await page_obj.evaluate(
-                """async (url) => {
-                    const r = await fetch(url, {
-                        credentials: 'include',
-                        headers: {'x-o3-app-name': 'dweb_client'},
-                    });
-                    if (!r.ok) return null;
-                    try { return await r.json(); } catch (e) { return null; }
-                }""",
-                api_url,
-            )
+            # Даём анти-боту прожевать challenge и выставить cookies: без этого
+            # даже запрос из контекста браузера получит 403.
+            try:
+                await page_obj.wait_for_selector('a[href*="/product/"]', timeout=8_000)
+            except Exception:  # noqa: BLE001 - плиток может и не быть, это не ошибка
+                log.debug("Ozon: плитки товаров не появились за 8 с")
+
+            payload = await _api_from_context(context, api_url)
+            if payload:
+                return payload
+
+            payload = await _api_from_page(page_obj, api_url)
             if payload:
                 return payload
 
@@ -294,6 +295,48 @@ async def _fetch_via_browser(query: str, page: int, sort: str) -> Any:
             return await _scrape_dom(page_obj)
         finally:
             await browser.close()
+
+
+async def _api_from_context(context: Any, api_url: str) -> Any:
+    """Запрос через APIRequestContext: те же cookies, но без ограничений CORS.
+
+    Из самой страницы fetch на api.ozon.ru падает с «Failed to fetch» —
+    браузер режет кросс-доменный запрос. Здесь запрос идёт мимо CORS.
+    """
+    try:
+        response = await context.request.get(
+            api_url, headers={"x-o3-app-name": "dweb_client", "Referer": BASE + "/"}
+        )
+        if not response.ok:
+            log.info("Ozon: composer-api через контекст -> HTTP %s", response.status)
+            return None
+        return await response.json()
+    except Exception as exc:  # noqa: BLE001 - любая ошибка означает «идём дальше»
+        log.info("Ozon: запрос через контекст не прошёл (%s: %s)", type(exc).__name__, exc)
+        return None
+
+
+async def _api_from_page(page_obj: Any, api_url: str) -> Any:
+    """Запрос из контекста страницы — сработает, если CORS всё же разрешён."""
+    try:
+        return await page_obj.evaluate(
+            """async (url) => {
+                try {
+                    const r = await fetch(url, {
+                        credentials: 'include',
+                        headers: {'x-o3-app-name': 'dweb_client'},
+                    });
+                    if (!r.ok) return null;
+                    return await r.json();
+                } catch (e) {
+                    return null;  // CORS или сеть — наверх пойдёт фолбэк на DOM
+                }
+            }""",
+            api_url,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.info("Ozon: fetch из страницы не прошёл (%s: %s)", type(exc).__name__, exc)
+        return None
 
 
 async def _scrape_dom(page_obj: Any) -> dict[str, Any]:
@@ -367,7 +410,13 @@ async def search(
     products = parse_products(payload, limit=limit) if payload else []
 
     if not products and settings.ozon_use_browser:
-        payload = await _fetch_via_browser(query, page, sort)
+        try:
+            payload = await _fetch_via_browser(query, page, sort)
+        except OzonBlocked:
+            raise
+        except Exception as exc:  # noqa: BLE001 - подробности браузера наружу не нужны
+            log.warning("Ozon: браузерный путь упал (%s: %s)", type(exc).__name__, exc)
+            raise OzonBlocked(f"браузерный путь не сработал: {exc}") from exc
         products = parse_products(payload, limit=limit)
 
     if not products:

@@ -110,6 +110,46 @@ def test_browser_path_reads_composer_api(stub_server, monkeypatch):
     assert stub_server.hits("/composer")[0]["headers"]["x-o3-app-name"] == "dweb_client"
 
 
+def test_browser_path_falls_back_to_dom_when_request_fails(stub_server, monkeypatch):
+    """API недостижим (как при CORS-ошибке «Failed to fetch») — спасает DOM.
+
+    Ровно тот случай, что вылез на живом Ozon: fetch из страницы в api.ozon.ru
+    режется браузером, и исключение не должно уносить нас мимо фолбэка.
+    """
+    stub_server.html_route("/search/", SEARCH_PAGE)
+    # Закрытый порт: и запрос через контекст, и fetch из страницы упадут.
+    monkeypatch.setattr(ozon, "API_URL", "http://127.0.0.1:1/composer")
+    monkeypatch.setattr(ozon, "SITE_SEARCH_URL", stub_server.url("/search/?text={query}"))
+
+    payload = asyncio.run(ozon._fetch_via_browser("кофе", 1, "popular"))
+    parsed = ozon.parse_products(payload)
+
+    assert {p.id for p in parsed} == {"1234567", "7654321"}
+
+
+def test_browser_failure_becomes_ozon_blocked(monkeypatch):
+    """Ошибки браузера наружу идут как OzonBlocked, а не сырым Playwright-стеком."""
+    monkeypatch.setattr(settings, "ozon_use_browser", True)
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("Page.evaluate: TypeError: Failed to fetch")
+
+    monkeypatch.setattr(ozon, "_fetch_via_browser", boom)
+    monkeypatch.setattr(ozon, "API_URL", "http://127.0.0.1:1/composer")
+
+    async def run():
+        try:
+            return await ozon.search("кофе")
+        finally:
+            from mp_parser.http import close_client
+
+            await close_client()
+
+    with pytest.raises(ozon.OzonBlocked) as info:
+        asyncio.run(run())
+    assert "браузерный путь" in str(info.value)
+
+
 def test_browser_path_falls_back_to_dom_on_403(stub_server, monkeypatch):
     """composer-api отвечает 403 — товары всё равно снимаются с вёрстки."""
     stub_server.html_route("/search/", SEARCH_PAGE)
