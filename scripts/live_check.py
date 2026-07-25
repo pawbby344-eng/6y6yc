@@ -5,7 +5,7 @@
 
     python scripts/live_check.py "кофе в зёрнах"
 
-Показывает по шагам: доступность хостов, что вернул каждый источник, какие
+Показывает по шагам: доступность эндпоинтов, что вернул каждый источник, какие
 поля удалось разобрать, и сообщение ровно в том виде, в каком его отправит бот.
 Ненулевой код возврата — что-то не работает.
 """
@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from urllib.parse import urlparse
 
 import httpx
 
@@ -26,26 +25,38 @@ from mp_parser.config import settings  # noqa: E402
 from mp_parser.http import UA, close_client  # noqa: E402
 from mp_parser.models import Product  # noqa: E402
 
-HOSTS = ("search.wb.ru", "www.wildberries.ru", "api.ozon.ru", "www.ozon.ru", "api.telegram.org")
+# Щупаем ровно те адреса, которыми пользуется парсер. Корни доменов проверять
+# бессмысленно: search.wb.ru/ отдаёт 307 в никуда, и это ничего не говорит
+# о работоспособности поиска.
+ENDPOINTS: tuple[tuple[str, str], ...] = (
+    ("WB search", wb.SEARCH_URL + "?query=%D0%BA%D0%BE%D1%84%D0%B5&resultset=catalog&dest=-1257786&appType=1&curr=rub"),
+    ("Ozon composer-api", ozon.API_URL + "?url=%2Fsearch%2F%3Ftext%3Dtest"),
+    ("Ozon сайт", ozon.SITE_SEARCH_URL.format(query="test")),
+    ("Telegram API", "https://api.telegram.org/"),
+)
 
 OK = "✅"
 FAIL = "❌"
 WARN = "⚠️ "
 
 
-async def check_hosts() -> list[str]:
-    """Проверяет именно HTTPS: TCP-коннект может пройти там, где TLS уже режут."""
-    print("== Доступность хостов (HTTPS) ==")
-    dead = []
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-        for host in HOSTS:
+async def check_endpoints() -> None:
+    """Показывает, что отвечают реальные адреса. Ничего не блокирует.
+
+    Любой HTTP-ответ (даже 403 или 498) означает, что сеть есть — дальше всё
+    решает уже разбор, поэтому прогон продолжается в любом случае.
+    """
+    print("== Доступность эндпоинтов ==")
+    # follow_redirects=False: редирект — это сам по себе ответ, гнаться за ним
+    # незачем, а его цель может висеть до таймаута.
+    async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+        for name, url in ENDPOINTS:
             try:
-                response = await client.get(f"https://{host}/", headers={"User-Agent": UA})
-                print(f"{OK} {host} -> HTTP {response.status_code}")
+                response = await client.get(url, headers={"User-Agent": UA})
+                note = " (антибот, но сеть есть)" if response.status_code in (403, 498) else ""
+                print(f"{OK} {name} -> HTTP {response.status_code}{note}")
             except httpx.HTTPError as exc:
-                dead.append(host)
-                print(f"{FAIL} {host}: {type(exc).__name__}: {exc}")
-    return dead
+                print(f"{WARN}{name}: {type(exc).__name__}: {exc or 'таймаут'}")
 
 
 def describe(products: list[Product], source: str) -> bool:
@@ -75,10 +86,7 @@ async def main(query: str) -> int:
     logging.basicConfig(level=logging.INFO, format="   %(levelname)s %(name)s: %(message)s")
     problems = 0
 
-    dead = await check_hosts()
-    if any(urlparse(wb.SEARCH_URL).hostname == host for host in dead):
-        print(f"\n{WARN}WB недоступен по сети — дальше проверять нечего")
-        return 1
+    await check_endpoints()
 
     print(f"\n== Wildberries: {query!r} ==")
     try:
@@ -94,8 +102,7 @@ async def main(query: str) -> int:
             problems += 1
     except ozon.OzonBlocked as exc:
         print(f"{FAIL} Ozon заблокировал: {exc}")
-        print("   Попробуй: pip install playwright && playwright install chromium,"
-              " затем OZON_USE_BROWSER=true")
+        print("   Проверь, что Playwright на месте: python -m playwright install chromium")
         problems += 1
     except Exception as exc:
         print(f"{FAIL} Ozon упал: {type(exc).__name__}: {exc}")
