@@ -5,7 +5,7 @@ from __future__ import annotations
 from html import escape
 
 from .models import Product
-from .aggregator import SearchResult
+from .aggregator import SOURCES, SearchResult
 
 SOURCE_TITLES = {"wb": "🟣 Wildberries", "ozon": "🔵 Ozon"}
 SOURCE_ERRORS = {
@@ -47,7 +47,7 @@ def product_line(product: Product, index: int) -> str:
     elif product.seller:
         meta.append(escape(_clip(product.seller, 24)))
     if meta:
-        lines.append("   ·  ".join(meta))
+        lines.append("  ·  ".join(meta))
 
     return "\n".join(lines)
 
@@ -57,7 +57,12 @@ def render(result: SearchResult, *, per_source: int | None = None) -> str:
     header = f"🔎 <b>{escape(result.query)}</b>"
     blocks: list[str] = [header]
 
-    for source, products in result.by_source.items():
+    # Порядок блоков фиксированный: иначе он зависел бы от того, кто ответил первым.
+    ordered = [s for s in SOURCES if s in result.by_source]
+    ordered += [s for s in result.by_source if s not in SOURCES]
+
+    for source in ordered:
+        products = result.by_source[source]
         title = SOURCE_TITLES.get(source, source)
         if not products:
             reason = SOURCE_ERRORS.get(source, "ничего не нашлось")

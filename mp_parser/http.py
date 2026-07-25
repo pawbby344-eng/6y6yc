@@ -32,29 +32,35 @@ class FetchError(RuntimeError):
     """Не удалось получить данные после всех попыток."""
 
 
-_client: httpx.AsyncClient | None = None
-_lock = asyncio.Lock()
-
-
+_clients: dict[asyncio.AbstractEventLoop, httpx.AsyncClient] = {}
 async def get_client() -> httpx.AsyncClient:
-    """Один общий клиент на процесс — переиспользуем соединения."""
-    global _client
-    async with _lock:
-        if _client is None or _client.is_closed:
-            _client = httpx.AsyncClient(
-                headers=BASE_HEADERS,
-                timeout=httpx.Timeout(settings.request_timeout),
-                follow_redirects=True,
-                limits=httpx.Limits(max_connections=16, max_keepalive_connections=8),
-            )
-    return _client
+    """Клиент на каждый event loop — соединения переиспользуются внутри loop.
+
+    Пул httpx привязан к тому loop, в котором создан, поэтому один клиент
+    «на процесс» ломается, если в процессе сменился loop (например, два
+    вызова asyncio.run подряд).
+    """
+    loop = asyncio.get_running_loop()
+    client = _clients.get(loop)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            headers=BASE_HEADERS,
+            timeout=httpx.Timeout(settings.request_timeout),
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=16, max_keepalive_connections=8),
+        )
+        _clients[loop] = client
+    return client
 
 
 async def close_client() -> None:
-    global _client
-    if _client is not None and not _client.is_closed:
-        await _client.aclose()
-    _client = None
+    """Закрывает клиент текущего loop и выбрасывает клиентов от мёртвых loop'ов."""
+    loop = asyncio.get_running_loop()
+    client = _clients.pop(loop, None)
+    if client is not None and not client.is_closed:
+        await client.aclose()
+    for dead in [key for key in _clients if key.is_closed()]:
+        _clients.pop(dead, None)
 
 
 async def fetch_json(

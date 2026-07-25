@@ -47,6 +47,15 @@ def test_render_contains_sources_and_links():
     assert "от 450 ₽" in text  # минимальная цена по источнику
 
 
+def test_render_keeps_fixed_source_order():
+    """Порядок блоков не должен зависеть от того, кто ответил первым."""
+    result = SearchResult("кофе")
+    result.by_source["ozon"] = [product(source="ozon", id="3", price=999)]
+    result.by_source["wb"] = [product(id="1", price=100)]
+    text = formatting.render(result)
+    assert text.index("Wildberries") < text.index("Ozon")
+
+
 def test_render_escapes_html():
     result = SearchResult("<script>")
     result.by_source["wb"] = [product(name='Кофе <b>"злой"</b> & крепкий')]
